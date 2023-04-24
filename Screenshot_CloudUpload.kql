@@ -1,0 +1,37 @@
+Here's a query that looks for a user taking a high number of screenshots using the top 5 most common screenshot tools and uploading them to cloud image hosting sites, using Defender for Endpoint data:
+
+```
+// Query for detecting high volume of screenshots and uploads to cloud image hosting sites
+let screenshot_tools = dynamic(["SnippingTool.exe", "Greenshot.exe", "Lightshot.exe", "PicPick.exe", "ScreenshotCaptor.exe"]);
+let image_upload_sites = dynamic(["imgur.com", "postimg.cc", "ibb.co", "imgbb.com", "sli.mg"]);
+let days = 1;
+
+DeviceFileEvents
+| where Timestamp > ago(days)
+| where ActionType == "FileCreated" or ActionType == "FileDeleted" or ActionType == "FileRenamed" or ActionType == "FileDownloaded" or ActionType == "FileModified"
+| where (ItemName contains ".png" or ItemName contains ".jpg" or ItemName contains ".jpeg" or ItemName contains ".bmp" or ItemName contains ".gif" or ItemName contains ".tiff")
+| where ItemPath contains "Pictures" or ItemPath contains "Downloads"
+| where InitiatingProcessFileName in (screenshot_tools)
+| join (DeviceFileEvents
+        | where ActionType == "FileCreated" or ActionType == "FileDeleted" or ActionType == "FileRenamed" or ActionType == "FileDownloaded" or ActionType == "FileModified"
+        | where (ItemName contains ".png" or ItemName contains ".jpg" or ItemName contains ".jpeg" or ItemName contains ".bmp" or ItemName contains ".gif" or ItemName contains ".tiff")
+        | where ItemPath contains "Pictures" or ItemPath contains "Downloads"
+        | where FolderPath contains "AppData\\Local\\Temp" or FolderPath contains "AppData\\Roaming\\Microsoft\\Windows\\Themes"
+        | where InitiatingProcessFileName in ("explorer.exe", "cmd.exe", "powershell.exe", "rundll32.exe", "wscript.exe", "cscript.exe", "mshta.exe", "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe")
+        ) on $left.ItemName == $right.ItemName
+| where $left.Timestamp >= $right.Timestamp and $left.Timestamp <= datetime_add('minute', 5, $right.Timestamp)
+| extend FileCreationTime = iif(ActionType == "FileCreated", Timestamp, iif(ActionType == "FileRenamed", OldTimestamp, Timestamp))
+| extend time_difference = toreal($left.Timestamp - $right.Timestamp)/600000000
+| where time_difference > 0 and time_difference < 5
+| join (DeviceNetworkEvents
+        | where Timestamp > ago(days)
+        | where RemoteUrl matches_any(image_upload_sites)
+        | extend fileName = extract(".com/.net/.*(?i)", 0, RemoteUrl)
+        | where fileName != ""
+        ) on $left.ItemName == $right.fileName
+| summarize count() by DeviceName, InitiatingProcessFileName, FolderPath, ItemPath, ItemName
+```
+
+This query looks for the use of the top 5 most common screenshot tools and checks whether the user has been uploading them to cloud image hosting sites. The query looks for FileEvents that create, modify, or delete image files with extensions `.png`, `.jpg`, `.jpeg`, `.bmp`, `.gif`, and `.tiff`. It filters for specific directories such as `Pictures` and `Downloads` and checks for the use of screenshot tools like Snipping Tool, Greenshot, Lightshot, PicPick, and ScreenshotCaptor. 
+
+It then joins these FileEvents with other FileEvents that are
